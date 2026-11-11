@@ -22,11 +22,37 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	netheader "knative.dev/networking/pkg/http/header"
 	netstats "knative.dev/networking/pkg/http/stats"
 	"knative.dev/serving/pkg/activator"
 )
+
+// ProxyHandlerOption customizes the handler returned by ProxyHandler.
+type ProxyHandlerOption func(*proxyHandlerOptions)
+
+type proxyHandlerOptions struct {
+	queueWaitTimeouts metric.Int64Counter
+}
+
+// WithQueueWaitTimeoutCounter makes ProxyHandler count the requests it
+// rejects because they exceeded the breaker's queue wait timeout.
+func WithQueueWaitTimeoutCounter(c metric.Int64Counter) ProxyHandlerOption {
+	return func(o *proxyHandlerOptions) {
+		o.queueWaitTimeouts = c
+	}
+}
+
+// NewQueueWaitTimeoutCounter creates the counter of requests rejected because
+// they waited too long in the queue for a concurrency slot.
+func NewQueueWaitTimeoutCounter(mp metric.MeterProvider) (metric.Int64Counter, error) {
+	return mp.Meter(scopeName).Int64Counter(
+		"kn.serving.queue.wait.timeouts",
+		metric.WithDescription("Number of requests rejected because they waited too long in the queue for a concurrency slot"),
+		metric.WithUnit("{request}"),
+	)
+}
 
 // ProxyHandler sends requests to the `next` handler at a rate controlled by
 // the passed `breaker`, while recording stats to `stats`.
@@ -35,7 +61,13 @@ func ProxyHandler(
 	breaker *Breaker,
 	stats *netstats.RequestStats,
 	next http.Handler,
+	opts ...ProxyHandlerOption,
 ) http.HandlerFunc {
+	var o proxyHandlerOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		if netheader.IsKubeletProbe(r) {
 			next.ServeHTTP(w, r)
@@ -72,7 +104,12 @@ func ProxyHandler(
 			next.ServeHTTP(w, r)
 		}); err != nil {
 			waitSpan.End()
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrRequestQueueFull) {
+			if errors.Is(err, ErrRequestQueueWaitTimeout) {
+				if o.queueWaitTimeouts != nil {
+					o.queueWaitTimeouts.Add(r.Context(), 1)
+				}
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrRequestQueueFull) {
 				http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			} else {
 				// This line is most likely untestable :-).

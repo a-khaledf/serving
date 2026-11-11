@@ -19,6 +19,7 @@ package v1
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -74,6 +75,7 @@ func (rts *RevisionTemplateSpec) Validate(ctx context.Context) *apis.FieldError 
 	errs = errs.Also(validateRevisionName(ctx, rts.Name, rts.GenerateName))
 	errs = errs.Also(validateQueueSidecarResourceAnnotations(rts.Annotations).ViaField("metadata.annotations"))
 	errs = errs.Also(validateProgressDeadlineAnnotation(rts.Annotations).ViaField("metadata.annotations"))
+	errs = errs.Also(validateQueueSidecarQueueAnnotations(rts.Annotations).ViaField("metadata.annotations"))
 	return errs
 }
 
@@ -214,6 +216,30 @@ func validateQueueSidecarResourceAnnotations(m map[string]string) *apis.FieldErr
 		}
 		if _, err := resource.ParseQuantity(v); err != nil {
 			errs = errs.Also(apis.ErrInvalidValue(v, apis.CurrentField).ViaKey(k))
+		}
+	}
+	return errs
+}
+
+// validateQueueSidecarQueueAnnotations validates the annotations that tune
+// queue-proxy's pending request queue.
+func validateQueueSidecarQueueAnnotations(m map[string]string) *apis.FieldError {
+	var errs *apis.FieldError
+	if k, v, ok := serving.QueueSidecarQueueDepthMultiplierAnnotation.Get(m); ok {
+		if value, err := strconv.ParseInt(v, 10, 32); err != nil {
+			errs = errs.Also(apis.ErrInvalidValue(v, apis.CurrentField).ViaKey(k))
+		} else if value < 1 {
+			errs = errs.Also(apis.ErrOutOfBoundsValue(value, 1, math.MaxInt32, apis.CurrentField).ViaKey(k))
+		}
+	}
+	if k, v, ok := serving.QueueSidecarQueueWaitTimeoutAnnotation.Get(m); ok {
+		if d, err := time.ParseDuration(v); err != nil {
+			errs = errs.Also(apis.ErrInvalidValue(v, apis.CurrentField).ViaKey(k))
+		} else if d < 0 {
+			errs = errs.Also((&apis.FieldError{
+				Message: fmt.Sprintf("queue-wait-timeout=%s must not be negative", v),
+				Paths:   []string{apis.CurrentField},
+			}).ViaKey(k))
 		}
 	}
 	return errs
