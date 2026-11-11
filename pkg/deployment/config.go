@@ -80,6 +80,10 @@ const (
 	queueSidecarTLSCipherSuitesKey     = "queue-sidecar-tls-cipher-suites"
 	queueSidecarTLSCurvePreferencesKey = "queue-sidecar-tls-curve-preferences"
 
+	// queueSidecar pending request queue keys.
+	queueSidecarQueueDepthMultiplierKey = "queue-sidecar-queue-depth-multiplier"
+	queueSidecarQueueWaitTimeoutKey     = "queue-sidecar-queue-wait-timeout"
+
 	defaultAffinityTypeKey   = "default-affinity-type"
 	defaultAffinityTypeValue = PreferSpreadRevisionOverNodes
 
@@ -213,6 +217,9 @@ func NewConfigFromMap(configMap map[string]string) (*Config, error) {
 		cm.AsString(queueSidecarTLSCipherSuitesKey, &nc.QueueSidecarTLSCipherSuites),
 		cm.AsString(queueSidecarTLSCurvePreferencesKey, &nc.QueueSidecarTLSCurvePreferences),
 
+		cm.AsInt(queueSidecarQueueDepthMultiplierKey, &nc.QueueSidecarQueueDepthMultiplier),
+		cm.AsDuration(queueSidecarQueueWaitTimeoutKey, &nc.QueueSidecarQueueWaitTimeout),
+
 		cm.AsString(RuntimeClassNameKey, &runtimeClassNames),
 
 		cm.AsBool(podIsAlwaysSchedulableKey, &nc.PodIsAlwaysSchedulable),
@@ -234,6 +241,14 @@ func NewConfigFromMap(configMap map[string]string) (*Config, error) {
 
 	if nc.DigestResolutionTimeout <= 0 {
 		return nil, fmt.Errorf("digest-resolution-timeout cannot be a non-positive duration, was %v", nc.DigestResolutionTimeout)
+	}
+
+	if _, ok := configMap[queueSidecarQueueDepthMultiplierKey]; ok && nc.QueueSidecarQueueDepthMultiplier < 1 {
+		return nil, fmt.Errorf("%s must be at least 1, was %d", queueSidecarQueueDepthMultiplierKey, nc.QueueSidecarQueueDepthMultiplier)
+	}
+
+	if nc.QueueSidecarQueueWaitTimeout < 0 {
+		return nil, fmt.Errorf("%s cannot be a negative duration, was %v", queueSidecarQueueWaitTimeoutKey, nc.QueueSidecarQueueWaitTimeout)
 	}
 
 	if affinity, ok := configMap[defaultAffinityTypeKey]; ok {
@@ -330,6 +345,15 @@ type Config struct {
 
 	// QueueSidecarTLSCurvePreferences is a comma-separated list of elliptic curves for the queue proxy sidecar.
 	QueueSidecarTLSCurvePreferences string
+
+	// QueueSidecarQueueDepthMultiplier sizes the queue proxy's pending request queue as a
+	// multiple of the revision's containerConcurrency. Zero means unset, in which case the
+	// queue proxy uses its built-in default (10).
+	QueueSidecarQueueDepthMultiplier int
+
+	// QueueSidecarQueueWaitTimeout is the maximum time a request may wait in the queue
+	// proxy's pending request queue for a concurrency slot. Zero means no limit.
+	QueueSidecarQueueWaitTimeout time.Duration
 
 	// DefaultAffinityType is a string that controls what affinity rules will be automatically
 	// applied to the PodSpec of all Knative services.

@@ -142,6 +142,14 @@ const (
 	// QueueSidecarEphemeralStorageResourceLimitAnnotationKey is the explicit value of the ephemeral storage limit for queue-proxy's limit resources
 	QueueSidecarEphemeralStorageResourceLimitAnnotationKey = "queue.sidecar." + GroupName + "/ephemeral-storage-resource-limit"
 
+	// QueueSidecarQueueDepthMultiplierAnnotationKey sets the size of queue-proxy's pending request
+	// queue as a multiple of the revision's containerConcurrency. It has to be an integer >= 1.
+	QueueSidecarQueueDepthMultiplierAnnotationKey = "queue.sidecar." + GroupName + "/queue-depth-multiplier"
+
+	// QueueSidecarQueueWaitTimeoutAnnotationKey is the maximum duration a request may wait in
+	// queue-proxy's pending request queue for a concurrency slot. Zero means no limit.
+	QueueSidecarQueueWaitTimeoutAnnotationKey = "queue.sidecar." + GroupName + "/queue-wait-timeout"
+
 	// VisibilityClusterLocal is the label value for VisibilityLabelKey
 	// that will result to the Route/KService getting a cluster local
 	// domain suffix.
@@ -203,6 +211,12 @@ var (
 	}
 	QueueSidecarEphemeralStorageResourceLimitAnnotation = kmap.KeyPriority{
 		QueueSidecarEphemeralStorageResourceLimitAnnotationKey,
+	}
+	QueueSidecarQueueDepthMultiplierAnnotation = kmap.KeyPriority{
+		QueueSidecarQueueDepthMultiplierAnnotationKey,
+	}
+	QueueSidecarQueueWaitTimeoutAnnotation = kmap.KeyPriority{
+		QueueSidecarQueueWaitTimeoutAnnotationKey,
 	}
 	ProgressDeadlineAnnotation = kmap.KeyPriority{
 		ProgressDeadlineAnnotationKey,
