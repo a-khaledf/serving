@@ -23,6 +23,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -449,7 +450,49 @@ func makeQueueContainer(rev *v1.Revision, cfg *config.Config) (*corev1.Container
 		}},
 	}
 
+	c.Env = append(c.Env, queueSettingsEnv(rev.GetAnnotations(), cfg.Deployment)...)
+
 	return c, nil
+}
+
+// queueSettingsEnv returns the env vars that tune the queue proxy's pending
+// request queue. The revision annotation takes precedence over the
+// config-deployment default, and a setting that is configured in neither is
+// omitted so the queue proxy falls back to its built-in default.
+func queueSettingsEnv(annotations map[string]string, cfg *deployment.Config) []corev1.EnvVar {
+	var env []corev1.EnvVar
+
+	// Annotation values are validated by the webhook, a value that is invalid
+	// nonetheless is ignored in favor of the config-deployment default.
+	multiplier := cfg.QueueSidecarQueueDepthMultiplier
+	if _, v, ok := serving.QueueSidecarQueueDepthMultiplierAnnotation.Get(annotations); ok {
+		if m, err := strconv.ParseInt(v, 10, 32); err == nil && m >= 1 {
+			multiplier = int(m)
+		}
+	}
+	if multiplier >= 1 {
+		env = append(env, corev1.EnvVar{
+			Name:  "QUEUE_DEPTH_MULTIPLIER",
+			Value: strconv.Itoa(multiplier),
+		})
+	}
+
+	// Unlike the multiplier an explicit "0s" annotation is meaningful: it
+	// disables a cluster-wide default for this revision.
+	timeout := cfg.QueueSidecarQueueWaitTimeout
+	if _, v, ok := serving.QueueSidecarQueueWaitTimeoutAnnotation.Get(annotations); ok {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			timeout = d
+		}
+	}
+	if timeout > 0 {
+		env = append(env, corev1.EnvVar{
+			Name:  "QUEUE_WAIT_TIMEOUT",
+			Value: timeout.String(),
+		})
+	}
+
+	return env
 }
 
 func applyReadinessProbeDefaults(p *corev1.Probe, port int32) {

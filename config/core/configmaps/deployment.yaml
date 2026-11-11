@@ -22,7 +22,7 @@ metadata:
     app.kubernetes.io/component: controller
     app.kubernetes.io/version: devel
   annotations:
-    knative.dev/example-checksum: "555b4826"
+    knative.dev/example-checksum: "1eb763cd"
 data:
   # This is the Go import path for the binary that is containerized
   # and substituted here.
@@ -110,6 +110,24 @@ data:
     # Comma-separated list of curve names (e.g. "X25519,CurveP256").
     # If omitted, the Go default curves are used.
     queue-sidecar-tls-curve-preferences: ""
+
+    # Sets the size of the queue proxy's pending request queue as a multiple
+    # of the revision's containerConcurrency. Must be an integer of at least 1.
+    # If omitted, the queue proxy's default (currently 10) is used.
+    # Can be overridden per revision with the annotation
+    # `queue.sidecar.serving.knative.dev/queue-depth-multiplier`.
+    # It has no effect on revisions with containerConcurrency 0.
+    # queue-sidecar-queue-depth-multiplier: "10"
+
+    # Sets the maximum time a request may wait in the queue proxy's pending
+    # request queue for a concurrency slot. A request that waits longer is
+    # failed with a 503 without reaching the user container. The time the
+    # user container takes to handle the request is not limited by this.
+    # "0s" (the default) means no limit.
+    # Can be overridden per revision with the annotation
+    # `queue.sidecar.serving.knative.dev/queue-wait-timeout`.
+    # It has no effect on revisions with containerConcurrency 0.
+    queue-sidecar-queue-wait-timeout: "0s"
 
     # If set, it automatically configures pod anti-affinity requirements for all Knative services.
     # It employs the `preferredDuringSchedulingIgnoredDuringExecution` weighted pod affinity term,

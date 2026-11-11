@@ -66,7 +66,7 @@ func mainHandler(
 	composedHandler := d.ProxyHandler
 
 	composedHandler = requestAppMetricsHandler(logger, composedHandler, breaker, mp)
-	composedHandler = queue.ProxyHandler(tracer, breaker, stats, composedHandler)
+	composedHandler = queue.ProxyHandler(tracer, breaker, stats, composedHandler, proxyHandlerOptions(logger, mp)...)
 	composedHandler = queue.ForwardedShimHandler(composedHandler)
 	composedHandler = handler.NewTimeoutHandler(composedHandler, "request timeout",
 		func(r *http.Request) (time.Duration, time.Duration, time.Duration) {
@@ -106,6 +106,15 @@ func mainHandler(
 	)
 
 	return composedHandler, drainers
+}
+
+func proxyHandlerOptions(logger *zap.SugaredLogger, mp metric.MeterProvider) []queue.ProxyHandlerOption {
+	c, err := queue.NewQueueWaitTimeoutCounter(mp)
+	if err != nil {
+		logger.Errorw("Error setting up the queue wait timeout counter. The metric will be unavailable.", zap.Error(err))
+		return nil
+	}
+	return []queue.ProxyHandlerOption{queue.WithQueueWaitTimeoutCounter(c)}
 }
 
 func adminHandler(ctx context.Context, logger *zap.SugaredLogger, drainer *pkghandler.Drainer) http.Handler {

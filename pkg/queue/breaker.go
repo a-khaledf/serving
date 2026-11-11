@@ -22,10 +22,15 @@ import (
 	"fmt"
 	"math"
 	"sync/atomic"
+	"time"
 )
 
 // ErrRequestQueueFull indicates the breaker queue depth was exceeded.
 var ErrRequestQueueFull = errors.New("pending request queue full")
+
+// ErrRequestQueueWaitTimeout indicates a request waited in the breaker queue
+// for a concurrency slot for longer than BreakerParams.QueueWaitTimeout.
+var ErrRequestQueueWaitTimeout = errors.New("pending request queue wait timeout")
 
 // MaxBreakerCapacity is the largest valid value for the MaxConcurrency value of BreakerParams.
 // This is limited by the maximum size of a chan struct{} in the current implementation.
@@ -36,6 +41,11 @@ type BreakerParams struct {
 	QueueDepth      int
 	MaxConcurrency  int
 	InitialCapacity int
+
+	// QueueWaitTimeout is the maximum time Maybe waits for a concurrency
+	// slot. It only bounds the wait: once the slot is acquired it has no
+	// further effect. Zero (the default) means no limit.
+	QueueWaitTimeout time.Duration
 }
 
 // Breaker is a component that enforces a concurrency limit on the
@@ -46,6 +56,9 @@ type Breaker struct {
 	inFlight   atomic.Int64
 	totalSlots int64
 	sem        *semaphore
+
+	// queueWaitTimeout bounds the wait for a slot in Maybe, 0 means no limit.
+	queueWaitTimeout time.Duration
 
 	// release is the callback function returned to callers by Reserve to
 	// allow the reservation made by Reserve to be released.
@@ -64,10 +77,15 @@ func NewBreaker(params BreakerParams) *Breaker {
 	if params.InitialCapacity < 0 || params.InitialCapacity > params.MaxConcurrency {
 		panic(fmt.Sprintf("Initial capacity must be between 0 and max concurrency. Got %v.", params.InitialCapacity))
 	}
+	if params.QueueWaitTimeout < 0 {
+		panic(fmt.Sprintf("Queue wait timeout must be 0 or greater. Got %v.", params.QueueWaitTimeout))
+	}
 
 	b := &Breaker{
 		totalSlots: int64(params.QueueDepth + params.MaxConcurrency),
 		sem:        newSemaphore(params.MaxConcurrency, params.InitialCapacity),
+
+		queueWaitTimeout: params.QueueWaitTimeout,
 	}
 
 	// Allocating the closure returned by Reserve here avoids an allocation in Reserve.
@@ -139,7 +157,7 @@ func (b *Breaker) Maybe(ctx context.Context, thunk func()) error {
 	defer b.releasePending()
 
 	// Wait for capacity in the active queue.
-	if err := b.sem.acquire(ctx); err != nil {
+	if err := b.acquire(ctx); err != nil {
 		return err
 	}
 	// Defer releasing capacity in the active.
@@ -151,6 +169,34 @@ func (b *Breaker) Maybe(ctx context.Context, thunk func()) error {
 	// Do the thing.
 	thunk()
 	// Report success
+	return nil
+}
+
+// acquire waits for capacity in the active queue, for at most
+// queueWaitTimeout when one is configured. The timeout is scoped to the wait
+// only: it is implemented with a context derived from ctx that is used for
+// nothing but the semaphore wait, so ctx itself is never cancelled by it.
+func (b *Breaker) acquire(ctx context.Context) error {
+	if b.queueWaitTimeout <= 0 {
+		return b.sem.acquire(ctx)
+	}
+	// The fast path avoids allocating a context and a timer for requests that
+	// don't have to wait at all.
+	if b.sem.tryAcquire() {
+		return nil
+	}
+
+	waitCtx, cancel := context.WithTimeoutCause(ctx, b.queueWaitTimeout, ErrRequestQueueWaitTimeout)
+	defer cancel()
+
+	if err := b.sem.acquire(waitCtx); err != nil {
+		// The cause tells our timer apart from ctx being cancelled or
+		// hitting a deadline of its own, which keep their existing errors.
+		if errors.Is(context.Cause(waitCtx), ErrRequestQueueWaitTimeout) {
+			return ErrRequestQueueWaitTimeout
+		}
+		return err
+	}
 	return nil
 }
 

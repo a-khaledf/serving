@@ -100,6 +100,13 @@ type config struct {
 	EnableHTTP2AutoDetection   bool `envconfig:"ENABLE_HTTP2_AUTO_DETECTION"` // optional
 	EnableMultiContainerProbes bool `split_words:"true"`
 
+	// QueueDepthMultiplier sizes the pending request queue as a multiple of
+	// ContainerConcurrency.
+	QueueDepthMultiplier int `split_words:"true" default:"10"` // optional
+	// QueueWaitTimeout is the maximum time a request may wait in the pending
+	// request queue for a concurrency slot. Zero means no limit.
+	QueueWaitTimeout time.Duration `split_words:"true"` // optional
+
 	// Logging configuration
 	ServingLoggingConfig string `split_words:"true" required:"true"`
 	ServingLoggingLevel  string `split_words:"true" required:"true"`
@@ -180,6 +187,10 @@ func Main(opts ...Option) error {
 	}
 
 	if err := envconfig.Process("", &env); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return err
+	}
+	if err := validateQueueConfig(env); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
@@ -403,18 +414,30 @@ func buildProxyHandler(logger *zap.SugaredLogger, env config, transport http.Rou
 	return httpProxy
 }
 
+// validateQueueConfig validates the settings of the pending request queue.
+func validateQueueConfig(env config) error {
+	if env.QueueDepthMultiplier < 1 {
+		return fmt.Errorf("QUEUE_DEPTH_MULTIPLIER must be at least 1, got %d", env.QueueDepthMultiplier)
+	}
+	if env.QueueWaitTimeout < 0 {
+		return fmt.Errorf("QUEUE_WAIT_TIMEOUT must not be negative, got %v", env.QueueWaitTimeout)
+	}
+	return nil
+}
+
 func buildBreaker(logger *zap.SugaredLogger, env config) *queue.Breaker {
 	if env.ContainerConcurrency < 1 {
 		return nil
 	}
 
-	// We set the queue depth to be equal to the container concurrency * 10 to
-	// allow the autoscaler time to react.
-	queueDepth := 10 * env.ContainerConcurrency
+	// We set the queue depth to be equal to the container concurrency * 10
+	// (unless the multiplier is overridden) to allow the autoscaler time to react.
+	queueDepth := env.QueueDepthMultiplier * env.ContainerConcurrency
 	params := queue.BreakerParams{
-		QueueDepth:      queueDepth,
-		MaxConcurrency:  env.ContainerConcurrency,
-		InitialCapacity: env.ContainerConcurrency,
+		QueueDepth:       queueDepth,
+		MaxConcurrency:   env.ContainerConcurrency,
+		InitialCapacity:  env.ContainerConcurrency,
+		QueueWaitTimeout: env.QueueWaitTimeout,
 	}
 	logger.Infof("Queue container is starting with BreakerParams = %#v", params)
 	return queue.NewBreaker(params)
